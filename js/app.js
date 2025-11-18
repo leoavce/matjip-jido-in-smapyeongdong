@@ -46,7 +46,7 @@ let currentReviews = [];
 let selectedRating = 0;
 let editingReviewId = null;
 
-// nyamnyam feed 상태
+// nyamnyam feed
 let allPosts = [];
 let postsLoaded = false;
 let recentVisits = [];
@@ -64,21 +64,17 @@ const userProfileBtn = document.getElementById("userProfileBtn");
 const userNicknameLabel = document.getElementById("userNicknameLabel");
 const logoutBtn = document.getElementById("logoutBtn");
 
-// 모달들
+// 맛집 모달
 const restaurantModal = document.getElementById("restaurantModal");
 const restaurantModalTitle = document.getElementById("restaurantModalTitle");
 const restaurantForm = document.getElementById("restaurantForm");
 const restaurantIdField = document.getElementById("restaurantIdField");
-
-const closeRestaurantModalBtn = document.getElementById(
-  "closeRestaurantModalBtn"
-);
+const closeRestaurantModalBtn = document.getElementById("closeRestaurantModalBtn");
 const cancelRestaurantBtn = document.getElementById("cancelRestaurantBtn");
 
 // 상세 모달
 const detailModal = document.getElementById("detailModal");
 const closeDetailModalBtn = document.getElementById("closeDetailModalBtn");
-
 const detailNameEl = document.getElementById("detailName");
 const detailAvgRatingEl = document.getElementById("detailAvgRating");
 const detailReviewCountEl = document.getElementById("detailReviewCount");
@@ -86,9 +82,7 @@ const editRestaurantBtn = document.getElementById("editRestaurantBtn");
 const deleteRestaurantBtn = document.getElementById("deleteRestaurantBtn");
 
 const detailLocationEl = document.getElementById("detailLocation");
-const detailFriendlyLocationEl = document.getElementById(
-  "detailFriendlyLocation"
-);
+const detailFriendlyLocationEl = document.getElementById("detailFriendlyLocation");
 const detailMainMenuEl = document.getElementById("detailMainMenu");
 const detailVibeEl = document.getElementById("detailVibe");
 const detailWaitingEl = document.getElementById("detailWaiting");
@@ -107,6 +101,7 @@ const cancelEditReviewBtn = document.getElementById("cancelEditReviewBtn");
 const statsAvgRatingEl = document.getElementById("statsAvgRating");
 const statsReviewCountEl = document.getElementById("statsReviewCount");
 const statsSummaryTextEl = document.getElementById("statsSummaryText");
+const statsRecentReviewEl = document.getElementById("statsRecentReview");
 
 const mapFrame = document.getElementById("mapFrame");
 const openMapExternalBtn = document.getElementById("openMapExternalBtn");
@@ -171,18 +166,24 @@ onAuthStateChanged(auth, async (user) => {
   }
   currentUser = user;
 
-  // 프로필 불러오기
-  const userDoc = await getDoc(doc(db, "users", user.uid));
-  if (userDoc.exists()) {
-    currentUserProfile = userDoc.data();
-  } else {
+  // 프로필 로딩
+  try {
+    const userDoc = await getDoc(doc(db, "users", user.uid));
+    if (userDoc.exists()) {
+      currentUserProfile = userDoc.data();
+    } else {
+      currentUserProfile = { email: user.email, nickname: user.email };
+      await setDoc(doc(db, "users", user.uid), {
+        nickname: currentUserProfile.nickname,
+        email: user.email,
+        createdAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    console.error("user profile error", err);
     currentUserProfile = { email: user.email, nickname: user.email };
-    await setDoc(doc(db, "users", user.uid), {
-      nickname: currentUserProfile.nickname,
-      email: user.email,
-      createdAt: serverTimestamp(),
-    });
   }
+
   userNicknameLabel.textContent =
     currentUserProfile.nickname || currentUser.email;
 
@@ -191,66 +192,92 @@ onAuthStateChanged(auth, async (user) => {
 
 // ---- 데이터 로딩 ----
 async function loadRestaurants() {
-  const q = query(
-    collection(db, "restaurants"),
-    orderBy("createdAt", "desc")
-  );
-  const snap = await getDocs(q);
-  restaurants = snap.docs.map((docSnap) => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
-  filteredRestaurants = restaurants;
-  renderRestaurantList();
+  try {
+    const q = query(
+      collection(db, "restaurants"),
+      orderBy("createdAt", "desc")
+    );
+    const snap = await getDocs(q);
+    restaurants = snap.docs.map((docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+    filteredRestaurants = restaurants;
+    renderRestaurantList();
+  } catch (err) {
+    console.error("load restaurants error", err);
+    if (err.code === "permission-denied") {
+      showToast("맛집 데이터를 읽을 권한이 없어요. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("맛집 목록을 불러오지 못했어요.");
+    }
+  }
 }
 
-// nyamnyam posts 로딩
+async function reloadPosts() {
+  try {
+    const q = query(
+      collection(db, "posts"),
+      orderBy("createdAt", "desc")
+    );
+    const snap = await getDocs(q);
+    allPosts = snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+  } catch (err) {
+    console.error("load posts error", err);
+    allPosts = [];
+    if (err.code === "permission-denied") {
+      showToast("nyamnyam feed를 읽을 권한이 없어요. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("피드를 불러오지 못했어요.");
+    }
+  }
+}
+
 async function loadPostsIfNeeded() {
   if (postsLoaded) return;
   await reloadPosts();
   postsLoaded = true;
 }
 
-async function reloadPosts() {
-  const q = query(
-    collection(db, "posts"),
-    orderBy("createdAt", "desc")
-  );
-  const snap = await getDocs(q);
-  allPosts = snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  }));
-}
-
-// 최근 방문(리뷰 기반) 로딩
 async function loadRecentVisits() {
   if (!currentUser) return;
-  const q = query(
-    collection(db, "reviews"),
-    where("userUID", "==", currentUser.uid),
-    orderBy("createdAt", "desc"),
-    limit(10)
-  );
-  const snap = await getDocs(q);
-  const reviews = snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  }));
+  try {
+    const q = query(
+      collection(db, "reviews"),
+      where("userUID", "==", currentUser.uid),
+      orderBy("createdAt", "desc"),
+      limit(10)
+    );
+    const snap = await getDocs(q);
+    const reviews = snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
 
-  // restaurantId로 묶어서, 이름 정보 채움
-  const byRestaurant = new Map();
-  reviews.forEach((r) => {
-    if (!r.restaurantId) return;
-    if (!byRestaurant.has(r.restaurantId)) {
-      byRestaurant.set(r.restaurantId, r);
+    const byRestaurant = new Map();
+    reviews.forEach((r) => {
+      if (!r.restaurantId) return;
+      if (!byRestaurant.has(r.restaurantId)) {
+        byRestaurant.set(r.restaurantId, r);
+      }
+    });
+
+    recentVisits = Array.from(byRestaurant.values());
+  } catch (err) {
+    console.error("load recent visits error", err);
+    recentVisits = [];
+    if (err.code === "permission-denied") {
+      showToast("리뷰 데이터를 읽을 권한이 없어요. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("최근 방문 정보를 불러오지 못했어요.");
     }
-  });
-
-  recentVisits = Array.from(byRestaurant.values());
+  }
 }
 
-// ---- 렌더링 ----
+// ---- 리스트 렌더링 ----
 function renderRestaurantList() {
   restaurantListEl.innerHTML = "";
 
@@ -351,11 +378,10 @@ function handleSearch() {
   renderRestaurantList();
 }
 
-// ---- 모달 공통 ----
+// ---- 모달 ----
 function openRestaurantModalForCreate() {
   restaurantModalTitle.textContent = "맛집 추가하기";
   restaurantIdField.value = "";
-
   restaurantForm.reset();
   restaurantModal.classList.remove("hidden");
 }
@@ -449,7 +475,7 @@ function openDetailModal(id) {
     detailLinkAreaEl.textContent = "등록된 링크가 없어요.";
   }
 
-  // Map (임베드는 계속 구글 사용, 외부는 네이버 지도)
+  // Map (임베드는 Google, 외부는 Naver)
   const locationForMap =
     restaurant.location || restaurant.friendlyLocation || "";
   if (locationForMap) {
@@ -525,9 +551,7 @@ restaurantForm.addEventListener("submit", async (e) => {
   const id = restaurantIdField.value || null;
 
   const name = document.getElementById("nameInput").value.trim();
-  const location = document
-    .getElementById("locationInput")
-    .value.trim();
+  const location = document.getElementById("locationInput").value.trim();
   const friendlyLocation = document
     .getElementById("friendlyLocationInput")
     .value.trim();
@@ -570,12 +594,10 @@ restaurantForm.addEventListener("submit", async (e) => {
 
   try {
     if (id) {
-      // update
       const ref = doc(db, "restaurants", id);
       await updateDoc(ref, payload);
       showToast("맛집 정보가 수정되었습니다.");
     } else {
-      // create
       const ref = collection(db, "restaurants");
       await addDoc(ref, {
         ...payload,
@@ -592,7 +614,11 @@ restaurantForm.addEventListener("submit", async (e) => {
     await loadRestaurants();
   } catch (err) {
     console.error(err);
-    showToast("저장 중 오류가 발생했습니다.");
+    if (err.code === "permission-denied") {
+      showToast("저장 권한이 없습니다. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("저장 중 오류가 발생했습니다.");
+    }
   }
 });
 
@@ -612,7 +638,6 @@ deleteRestaurantBtn.addEventListener("click", async () => {
   }
 
   try {
-    // 리뷰 함께 삭제
     const reviewsRef = collection(db, "reviews");
     const q = query(
       reviewsRef,
@@ -631,7 +656,11 @@ deleteRestaurantBtn.addEventListener("click", async () => {
     await loadRestaurants();
   } catch (err) {
     console.error(err);
-    showToast("삭제 중 오류가 발생했습니다.");
+    if (err.code === "permission-denied") {
+      showToast("삭제 권한이 없습니다. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("삭제 중 오류가 발생했습니다.");
+    }
   }
 });
 
@@ -646,20 +675,33 @@ editRestaurantBtn.addEventListener("click", () => {
 
 // ---- 리뷰 ----
 async function loadReviews(restaurantId) {
-  const ref = collection(db, "reviews");
-  const q = query(
-    ref,
-    where("restaurantId", "==", restaurantId),
-    orderBy("createdAt", "desc")
-  );
-
-  const snap = await getDocs(q);
-  currentReviews = snap.docs.map((docSnap) => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
-  renderReviews();
-  updateStatsFromReviews();
+  try {
+    const ref = collection(db, "reviews");
+    const q = query(
+      ref,
+      where("restaurantId", "==", restaurantId),
+      orderBy("createdAt", "desc")
+    );
+    const snap = await getDocs(q);
+    currentReviews = snap.docs.map((docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+    renderReviews();
+    updateStatsFromReviews();
+  } catch (err) {
+    console.error("load reviews error", err);
+    currentReviews = [];
+    renderReviews();
+    updateStatsFromReviews();
+    if (err.code === "permission-denied") {
+      showToast("리뷰를 읽을 권한이 없어요. Firestore 규칙을 확인해 주세요.");
+    } else if (err.code === "failed-precondition") {
+      showToast("리뷰 정렬을 위해 Firestore 인덱스가 필요합니다. 콘솔의 링크를 눌러 인덱스를 생성해 주세요.");
+    } else {
+      showToast("리뷰를 불러오지 못했어요.");
+    }
+  }
 }
 
 function renderReviews() {
@@ -729,6 +771,8 @@ function updateStatsFromReviews() {
     statsReviewCountEl.textContent = "0개";
     statsSummaryTextEl.textContent =
       "리뷰가 쌓이면 전체 분위기를 요약해서 보여줄게요.";
+    statsRecentReviewEl.textContent =
+      "아직 등록된 리뷰가 없어요.";
     return;
   }
 
@@ -753,27 +797,42 @@ function updateStatsFromReviews() {
 
   statsSummaryTextEl.textContent = summary;
 
-  // restaurant 문서에 집계값 저장
+  // 가장 최근 리뷰 한 줄
+  const recent = currentReviews[0];
+  if (recent) {
+    const text = (recent.text || "").replace(/\s+/g, " ").trim();
+    const snippet = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    statsRecentReviewEl.textContent = snippet || "내용이 없는 리뷰입니다.";
+  } else {
+    statsRecentReviewEl.textContent =
+      "아직 등록된 리뷰가 없어요.";
+  }
+
   if (selectedRestaurantId) {
     updateRestaurantStats(selectedRestaurantId, avg, count);
   }
 }
 
 async function updateRestaurantStats(restaurantId, avg, count) {
+  // 1) Firestore가 막혀도, 화면 카드에는 반영되도록 로컬 먼저 업데이트
+  restaurants = restaurants.map((r) =>
+    r.id === restaurantId ? { ...r, avgRating: avg, reviewCount: count } : r
+  );
+  filteredRestaurants = restaurants;
+  renderRestaurantList();
+
+  // 2) Firestore 업데이트는 시도만 하고, 권한 에러는 조용히 무시
   try {
     await updateDoc(doc(db, "restaurants", restaurantId), {
       avgRating: avg,
       reviewCount: count,
     });
-
-    // 로컬 캐시에도 반영
-    restaurants = restaurants.map((r) =>
-      r.id === restaurantId ? { ...r, avgRating: avg, reviewCount: count } : r
-    );
-    filteredRestaurants = restaurants;
-    renderRestaurantList();
   } catch (err) {
     console.error("update stats error", err);
+    if (err.code === "permission-denied") {
+      // 콘솔로만 남기고, 사용자에겐 굳이 토스트 안 띄움 (어차피 화면에는 반영됨)
+      return;
+    }
   }
 }
 
@@ -814,14 +873,12 @@ async function submitReview() {
 
   try {
     if (editingReviewId) {
-      // update
       await updateDoc(doc(db, "reviews", editingReviewId), {
         rating: selectedRating,
         text,
       });
       showToast("리뷰가 수정되었어요.");
     } else {
-      // create
       await addDoc(collection(db, "reviews"), {
         restaurantId: selectedRestaurantId,
         rating: selectedRating,
@@ -843,7 +900,11 @@ async function submitReview() {
     await loadReviews(selectedRestaurantId);
   } catch (err) {
     console.error(err);
-    showToast("리뷰 저장 중 오류가 발생했습니다.");
+    if (err.code === "permission-denied") {
+      showToast("리뷰 저장 권한이 없습니다. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("리뷰 저장 중 오류가 발생했습니다.");
+    }
   }
 }
 
@@ -878,11 +939,15 @@ async function deleteReview(id) {
     await loadReviews(selectedRestaurantId);
   } catch (err) {
     console.error(err);
-    showToast("리뷰 삭제 중 오류가 발생했습니다.");
+    if (err.code === "permission-denied") {
+      showToast("리뷰 삭제 권한이 없습니다. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("리뷰 삭제 중 오류가 발생했습니다.");
+    }
   }
 }
 
-// ---- nyamnyam feed 렌더링 ----
+// ---- nyamnyam feed ----
 function setFeedActiveTab(tabName) {
   feedTabButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.feedTab === tabName);
@@ -1024,7 +1089,6 @@ function renderAllPosts() {
   });
 }
 
-// nyamnyam 글 올리기
 async function submitPost() {
   if (!currentUser) {
     showToast("다시 로그인 해주세요.");
@@ -1058,11 +1122,14 @@ async function submitPost() {
     renderAllPosts();
   } catch (err) {
     console.error(err);
-    showToast("글 저장 중 오류가 발생했습니다.");
+    if (err.code === "permission-denied") {
+      showToast("글 저장 권한이 없습니다. Firestore 규칙을 확인해 주세요.");
+    } else {
+      showToast("글 저장 중 오류가 발생했습니다.");
+    }
   }
 }
 
-// feed 모달 열기
 async function openFeedModal(defaultTab) {
   if (!currentUser) {
     showToast("다시 로그인 해주세요.");
@@ -1085,7 +1152,7 @@ function closeFeedModal() {
   feedModal.classList.add("hidden");
 }
 
-// ---- 이벤트 바인딩 ----
+// ---- 이벤트 ----
 addRestaurantBtn.addEventListener("click", openRestaurantModalForCreate);
 closeRestaurantModalBtn.addEventListener("click", closeRestaurantModal);
 cancelRestaurantBtn.addEventListener("click", closeRestaurantModal);
@@ -1113,12 +1180,10 @@ detailTabButtons.forEach((btn) => {
 submitReviewBtn.addEventListener("click", submitReview);
 cancelEditReviewBtn.addEventListener("click", cancelEditReview);
 
-// 프로필 버튼 -> 내 기록 모달
 userProfileBtn.addEventListener("click", () =>
   openFeedModal("mine")
 );
 
-// 피드 탐색하기 버튼 -> 전체 피드 탭으로 열기
 exploreFeedBtn.addEventListener("click", () =>
   openFeedModal("all")
 );
@@ -1132,6 +1197,3 @@ feedTabButtons.forEach((btn) => {
 });
 
 postSubmitBtn.addEventListener("click", submitPost);
-
-// 프로필 버튼 짧게 눌렀을 때 토스트로 상태만 보고 싶을 때는 feedModal 대신 이걸 써도 됨
-// 일단 지금은 모달로 열리게 해둔 상태라 별도 핸들러는 두지 않음.
