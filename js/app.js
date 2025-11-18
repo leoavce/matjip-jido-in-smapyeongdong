@@ -18,6 +18,7 @@ import {
   where,
   orderBy,
   serverTimestamp,
+  limit,
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -45,6 +46,11 @@ let currentReviews = [];
 let selectedRating = 0;
 let editingReviewId = null;
 
+// nyamnyam feed 상태
+let allPosts = [];
+let postsLoaded = false;
+let recentVisits = [];
+
 // ---- DOM ----
 const toastEl = document.getElementById("toast");
 
@@ -52,6 +58,7 @@ const searchInput = document.getElementById("searchInput");
 const restaurantListEl = document.getElementById("restaurantList");
 const emptyStateEl = document.getElementById("emptyState");
 
+const exploreFeedBtn = document.getElementById("exploreFeedBtn");
 const addRestaurantBtn = document.getElementById("addRestaurantBtn");
 const userProfileBtn = document.getElementById("userProfileBtn");
 const userNicknameLabel = document.getElementById("userNicknameLabel");
@@ -106,6 +113,20 @@ const openMapExternalBtn = document.getElementById("openMapExternalBtn");
 
 const detailTabButtons = document.querySelectorAll(".detail-tab-button");
 const detailTabPanels = document.querySelectorAll(".detail-tab-panel");
+
+// feed 모달
+const feedModal = document.getElementById("feedModal");
+const closeFeedModalBtn = document.getElementById("closeFeedModalBtn");
+const feedTabButtons = document.querySelectorAll("[data-feed-tab]");
+const myFeedPanel = document.getElementById("feedTab-mine");
+const allFeedPanel = document.getElementById("feedTab-all");
+const myRestaurantsListEl = document.getElementById("myRestaurantsList");
+const recentVisitsListEl = document.getElementById("recentVisitsList");
+const myPostsListEl = document.getElementById("myPostsList");
+const allPostsListEl = document.getElementById("allPostsList");
+const postTitleInput = document.getElementById("postTitleInput");
+const postContentInput = document.getElementById("postContentInput");
+const postSubmitBtn = document.getElementById("postSubmitBtn");
 
 // ---- 유틸 ----
 function showToast(message, duration = 2000) {
@@ -183,6 +204,52 @@ async function loadRestaurants() {
   renderRestaurantList();
 }
 
+// nyamnyam posts 로딩
+async function loadPostsIfNeeded() {
+  if (postsLoaded) return;
+  await reloadPosts();
+  postsLoaded = true;
+}
+
+async function reloadPosts() {
+  const q = query(
+    collection(db, "posts"),
+    orderBy("createdAt", "desc")
+  );
+  const snap = await getDocs(q);
+  allPosts = snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  }));
+}
+
+// 최근 방문(리뷰 기반) 로딩
+async function loadRecentVisits() {
+  if (!currentUser) return;
+  const q = query(
+    collection(db, "reviews"),
+    where("userUID", "==", currentUser.uid),
+    orderBy("createdAt", "desc"),
+    limit(10)
+  );
+  const snap = await getDocs(q);
+  const reviews = snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  }));
+
+  // restaurantId로 묶어서, 이름 정보 채움
+  const byRestaurant = new Map();
+  reviews.forEach((r) => {
+    if (!r.restaurantId) return;
+    if (!byRestaurant.has(r.restaurantId)) {
+      byRestaurant.set(r.restaurantId, r);
+    }
+  });
+
+  recentVisits = Array.from(byRestaurant.values());
+}
+
 // ---- 렌더링 ----
 function renderRestaurantList() {
   restaurantListEl.innerHTML = "";
@@ -203,6 +270,8 @@ function renderRestaurantList() {
 
     const tags = r.tags || [];
     const hashtags = r.hashtags || [];
+    const category = tags[0] || "";
+    const mainMenu = r.mainMenu || "";
 
     card.innerHTML = `
       <div class="card-header-row">
@@ -218,6 +287,14 @@ function renderRestaurantList() {
           ${r.friendlyLocation || r.location || "-"}
         </span>
       </div>
+      <div class="card-meta-row">
+        <span class="card-category">
+          ${category || "카테고리 미지정"}
+        </span>
+        <span class="card-menu">
+          ${mainMenu ? `대표 메뉴 · ${mainMenu}` : ""}
+        </span>
+      </div>
       <div class="card-tags-row">
         ${tags
           .map(
@@ -226,7 +303,6 @@ function renderRestaurantList() {
           )
           .join("")}
         ${hashtags
-          .slice(0, 3)
           .map(
             (h) =>
               `<span class="chip chip-hash">#${h.replace(
@@ -264,10 +340,11 @@ function handleSearch() {
     const hashes = (r.hashtags || [])
       .map((h) => (h || "").toLowerCase())
       .join(" ");
+    const k = keyword.replace(/^#/, "");
     return (
       name.includes(keyword) ||
       tags.includes(keyword) ||
-      hashes.includes(keyword.replace(/^#/, ""))
+      hashes.includes(k)
     );
   });
 
@@ -372,20 +449,26 @@ function openDetailModal(id) {
     detailLinkAreaEl.textContent = "등록된 링크가 없어요.";
   }
 
-  // Map
+  // Map (임베드는 계속 구글 사용, 외부는 네이버 지도)
   const locationForMap =
     restaurant.location || restaurant.friendlyLocation || "";
   if (locationForMap) {
     const encoded = encodeURIComponent(locationForMap);
     mapFrame.src = `https://www.google.com/maps?q=${encoded}&output=embed`;
+  } else {
+    mapFrame.src = "";
+  }
+
+  const searchQueryForNaver = restaurant.name || locationForMap || "";
+  if (searchQueryForNaver) {
+    const encodedName = encodeURIComponent(searchQueryForNaver);
     openMapExternalBtn.onclick = () => {
       window.open(
-        `https://www.google.com/maps/search/?api=1&query=${encoded}`,
+        `https://map.naver.com/p/search/${encodedName}`,
         "_blank"
       );
     };
   } else {
-    mapFrame.src = "";
     openMapExternalBtn.onclick = null;
   }
 
@@ -799,6 +882,209 @@ async function deleteReview(id) {
   }
 }
 
+// ---- nyamnyam feed 렌더링 ----
+function setFeedActiveTab(tabName) {
+  feedTabButtons.forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.feedTab === tabName);
+  });
+  myFeedPanel.classList.toggle("active", tabName === "mine");
+  allFeedPanel.classList.toggle("active", tabName === "all");
+}
+
+function renderMyRestaurantsInFeed() {
+  myRestaurantsListEl.innerHTML = "";
+  const mine = restaurants.filter(
+    (r) => r.creatorUID === currentUser?.uid
+  );
+
+  if (mine.length === 0) {
+    myRestaurantsListEl.innerHTML =
+      '<div class="feed-empty">아직 내가 추가한 맛집이 없어요.</div>';
+    return;
+  }
+
+  mine.forEach((r) => {
+    const div = document.createElement("div");
+    div.className = "feed-log-item";
+    div.innerHTML = `
+      <div class="feed-log-main">
+        <span class="feed-log-title">${r.name}</span>
+        <span class="feed-log-meta">${r.friendlyLocation || r.location || "-"}</span>
+      </div>
+      <button class="text-button small" type="button">열기</button>
+    `;
+    div.querySelector("button").addEventListener("click", () => {
+      openDetailModal(r.id);
+      feedModal.classList.add("hidden");
+    });
+    myRestaurantsListEl.appendChild(div);
+  });
+}
+
+function renderRecentVisitsInFeed() {
+  recentVisitsListEl.innerHTML = "";
+  if (!recentVisits || recentVisits.length === 0) {
+    recentVisitsListEl.innerHTML =
+      '<div class="feed-empty">최근에 남긴 리뷰가 없어요.</div>';
+    return;
+  }
+
+  recentVisits.forEach((r) => {
+    const rest = restaurants.find(
+      (x) => x.id === r.restaurantId
+    );
+    const name = rest?.name || "알 수 없는 식당";
+    const loc = rest?.friendlyLocation || rest?.location || "";
+    const div = document.createElement("div");
+    div.className = "feed-log-item";
+    div.innerHTML = `
+      <div class="feed-log-main">
+        <span class="feed-log-title">${name}</span>
+        <span class="feed-log-meta">
+          별점 ${r.rating || "-"} · ${formatDate(r.createdAt)}${loc ? " · " + loc : ""}
+        </span>
+      </div>
+      <button class="text-button small" type="button">열기</button>
+    `;
+    div.querySelector("button").addEventListener("click", () => {
+      if (rest) {
+        openDetailModal(rest.id);
+        feedModal.classList.add("hidden");
+      }
+    });
+    recentVisitsListEl.appendChild(div);
+  });
+}
+
+function renderMyPosts() {
+  myPostsListEl.innerHTML = "";
+  const mine = allPosts.filter(
+    (p) => p.authorUID === currentUser?.uid
+  );
+
+  if (mine.length === 0) {
+    myPostsListEl.innerHTML =
+      '<div class="feed-empty">아직 작성한 nyamnyam 글이 없어요.</div>';
+    return;
+  }
+
+  mine.forEach((p) => {
+    const div = document.createElement("article");
+    div.className = "feed-post-card";
+    div.innerHTML = `
+      <div class="feed-post-header">
+        <div class="avatar-circle">
+          ${(p.authorNickname || "?").charAt(0)}
+        </div>
+        <div class="feed-post-title-block">
+          <div class="feed-post-title-line">
+            <span class="feed-post-author">${p.authorNickname || "익명"}</span>
+            <span class="feed-post-date">${formatDate(p.createdAt)}</span>
+          </div>
+          <h4 class="feed-post-title">${p.title || "(제목 없음)"}</h4>
+        </div>
+      </div>
+      <div class="feed-post-body">
+        ${p.content ? p.content.replace(/\n/g, "<br>") : ""}
+      </div>
+    `;
+    myPostsListEl.appendChild(div);
+  });
+}
+
+function renderAllPosts() {
+  allPostsListEl.innerHTML = "";
+  if (!allPosts || allPosts.length === 0) {
+    allPostsListEl.innerHTML =
+      '<div class="feed-empty">아직 등록된 nyamnyam 글이 없어요.</div>';
+    return;
+  }
+
+  allPosts.forEach((p) => {
+    const div = document.createElement("article");
+    div.className = "feed-post-card";
+    div.innerHTML = `
+      <div class="feed-post-header">
+        <div class="avatar-circle">
+          ${(p.authorNickname || "?").charAt(0)}
+        </div>
+        <div class="feed-post-title-block">
+          <div class="feed-post-title-line">
+            <span class="feed-post-author">${p.authorNickname || "익명"}</span>
+            <span class="feed-post-date">${formatDate(p.createdAt)}</span>
+          </div>
+          <h4 class="feed-post-title">${p.title || "(제목 없음)"}</h4>
+        </div>
+      </div>
+      <div class="feed-post-body">
+        ${p.content ? p.content.replace(/\n/g, "<br>") : ""}
+      </div>
+    `;
+    allPostsListEl.appendChild(div);
+  });
+}
+
+// nyamnyam 글 올리기
+async function submitPost() {
+  if (!currentUser) {
+    showToast("다시 로그인 해주세요.");
+    return;
+  }
+  const title = postTitleInput.value.trim();
+  const content = postContentInput.value.trim();
+
+  if (!title || !content) {
+    showToast("제목과 내용을 모두 입력해주세요.");
+    return;
+  }
+
+  try {
+    await addDoc(collection(db, "posts"), {
+      title,
+      content,
+      authorUID: currentUser.uid,
+      authorNickname:
+        currentUserProfile?.nickname || currentUser.email,
+      createdAt: serverTimestamp(),
+    });
+    showToast("nyamnyam 글이 등록되었어요.");
+
+    postTitleInput.value = "";
+    postContentInput.value = "";
+
+    postsLoaded = false;
+    await loadPostsIfNeeded();
+    renderMyPosts();
+    renderAllPosts();
+  } catch (err) {
+    console.error(err);
+    showToast("글 저장 중 오류가 발생했습니다.");
+  }
+}
+
+// feed 모달 열기
+async function openFeedModal(defaultTab) {
+  if (!currentUser) {
+    showToast("다시 로그인 해주세요.");
+    return;
+  }
+
+  await loadPostsIfNeeded();
+  await loadRecentVisits();
+
+  renderMyRestaurantsInFeed();
+  renderRecentVisitsInFeed();
+  renderMyPosts();
+  renderAllPosts();
+
+  setFeedActiveTab(defaultTab || "mine");
+  feedModal.classList.remove("hidden");
+}
+
+function closeFeedModal() {
+  feedModal.classList.add("hidden");
+}
+
 // ---- 이벤트 바인딩 ----
 addRestaurantBtn.addEventListener("click", openRestaurantModalForCreate);
 closeRestaurantModalBtn.addEventListener("click", closeRestaurantModal);
@@ -827,10 +1113,25 @@ detailTabButtons.forEach((btn) => {
 submitReviewBtn.addEventListener("click", submitReview);
 cancelEditReviewBtn.addEventListener("click", cancelEditReview);
 
-// 프로필 버튼은 일단 토스트 정도만
-userProfileBtn.addEventListener("click", () => {
-  if (!currentUserProfile) return;
-  showToast(
-    `${currentUserProfile.nickname || currentUser.email} 님으로 로그인 중`
+// 프로필 버튼 -> 내 기록 모달
+userProfileBtn.addEventListener("click", () =>
+  openFeedModal("mine")
+);
+
+// 피드 탐색하기 버튼 -> 전체 피드 탭으로 열기
+exploreFeedBtn.addEventListener("click", () =>
+  openFeedModal("all")
+);
+
+closeFeedModalBtn.addEventListener("click", closeFeedModal);
+
+feedTabButtons.forEach((btn) => {
+  btn.addEventListener("click", () =>
+    setFeedActiveTab(btn.dataset.feedTab)
   );
 });
+
+postSubmitBtn.addEventListener("click", submitPost);
+
+// 프로필 버튼 짧게 눌렀을 때 토스트로 상태만 보고 싶을 때는 feedModal 대신 이걸 써도 됨
+// 일단 지금은 모달로 열리게 해둔 상태라 별도 핸들러는 두지 않음.
