@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>로그인 · 판교 맛집 지도</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+  />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="auth-fullscreen">
+    <div class="login-card">
+      <h1 class="login-title">로그인</h1>
+      <p class="login-subtitle">
+        판교 맛집 피드에 입장하려면 이메일과 비밀번호로 로그인 해주세요.
+      </p>
+
+      <form id="loginForm">
+        <div class="login-form-row">
+          <label>이메일</label>
+          <input type="email" name="email" placeholder="you@example.com" required />
+        </div>
+        <div class="login-form-row">
+          <label>비밀번호</label>
+          <input type="password" name="password" placeholder="••••••••" required />
+        </div>
+        <div class="login-actions">
+          <!-- 로그인 버튼 -->
+          <button
+            type="submit"
+            class="primary-btn"
+            style="width:100%;justify-content:center;"
+          >
+            로그인
+          </button>
+
+          <!-- 회원가입 버튼 (눈에 띄게) -->
+          <button
+            type="button"
+            class="secondary-btn"
+            style="width:100%;justify-content:center;"
+            onclick="window.location.href='signup.html'"
+          >
+            <i class="fa fa-user-plus"></i>
+            아직 계정이 없나요? 회원가입 하기
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import {
+      getAuth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBO9tShfmq6MM6V0igKmIuUkg-U_9sW13g",
+      authDomain: "matjip-jido-a6020.firebaseapp.com",
+      projectId: "matjip-jido-a6020",
+      storageBucket: "matjip-jido-a6020.firebasestorage.app",
+      messagingSenderId: "794785619474",
+      appId: "1:794785619474:web:06b7e2d25088742fea42cb",
+      measurementId: "G-YZBYZX7G7B"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    const toastEl = document.getElementById("toast");
+    function showToast(message, duration = 2000) {
+      toastEl.textContent = message;
+      toastEl.classList.remove("hidden");
+      setTimeout(() => {
+        toastEl.classList.add("hidden");
+      }, duration);
+    }
+
+    // 이미 로그인 되어 있으면 바로 메인으로
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        window.location.href = "index.html";
+      }
+    });
+
+    const loginForm = document.getElementById("loginForm");
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(loginForm);
+      const email = formData.get("email").trim();
+      const password = formData.get("password").trim();
+
+      if (!email || !password) {
+        showToast("이메일과 비밀번호를 모두 입력해주세요.");
+        return;
+      }
+
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        window.location.href = "index.html";
+      } catch (error) {
+        console.error(error);
+        showToast("로그인에 실패했어요. 이메일/비밀번호를 확인해주세요.");
+      }
+    });
+  </script>
+</body>
+</html>
